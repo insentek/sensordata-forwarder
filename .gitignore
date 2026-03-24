@@ -137,3 +137,11 @@ dist
 # Vite logs files
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# Bun
+.bun
+
+# Project runtime files
+data/*.json
+!data/.gitkeep
+config/local*.json
