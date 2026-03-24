@@ -2,20 +2,29 @@
 
 ## Executive Summary
 
-`sensordata-forwarder` 是一个基于最新 Bun 与 TypeScript 实现的 E 生态数据转发管道。项目围绕你提供的《e生态开放接口文档 ver3.1.9》实现四个核心能力：
+`sensordata-forwarder` 是一个基于 Bun 与 TypeScript 实现的 E 生态数据转发管道。项目围绕《e生态开放接口文档 ver3.1.9》实现核心能力：
 
 1. 从配置文件加载 `appid` 与 `secret`；
 2. 通过 `/v3/devices` 拉取设备列表；
 3. 按设备调用 E 生态 API 拉取数据，支持普通设备与压电式雨量计两类数据结构；
-4. 动态加载外部转换脚本，以每个 datapoint 为输入，生成新的 payload，并转发到 HTTP 或 MQTT 等下游端点。
+4. 通过 **连接器（Connector）** 将每个 datapoint 转换并转发到客户平台（MQTT、HTTP 等）。
+
+项目提供两种运行模式：
+
+| 模式 | 适用场景 | 配置关键字 |
+| --- | --- | --- |
+| **Connector 模式**（推荐） | 客户自定义转发逻辑，连接器自行管理连接和协议 | `connector` |
+| Converter 模式（传统） | 简单数据变换 + 配置化输出 | `converter` + `routing` + `outputs` |
 
 ## Table of Contents
 
 - [架构设计](#架构设计)
 - [目录结构](#目录结构)
+- [快速开始](#快速开始)
+- [连接器开发指南](#连接器开发指南)
 - [配置说明](#配置说明)
 - [运行方式](#运行方式)
-- [外部转换脚本接口](#外部转换脚本接口)
+- [传统 Converter 模式](#传统-converter-模式)
 - [与 E 生态接口文档的映射关系](#与-e-生态接口文档的映射关系)
 
 ## 架构设计
@@ -28,20 +37,23 @@ flowchart LR
   C --> E[/v3/devices]
   C --> F[/v3/device/{sn}/data*]
   F --> G[Normalized Datapoints]
-  G --> H[External Converter Script]
-  H --> I[Outbound Router]
-  I --> J[HTTP Endpoint]
-  I --> K[MQTT Broker]
-  G --> L[State Store]
+  G --> H{模式?}
+  H -->|Connector| I[Connector Module]
+  I --> J[MQTT / HTTP / ...]
+  H -->|Converter| K[Converter Script]
+  K --> L[Output Router]
+  L --> M[HTTP Endpoint]
+  L --> N[MQTT Broker]
+  G --> O[State Store]
 ```
 
 ### 设计原则
 
 | 设计点 | 实现方式 | 价值 |
 | --- | --- | --- |
-| 配置与代码解耦 | 所有凭据、设备过滤、抓取模式、下游输出均在 JSON 配置中定义 | 降低部署修改成本 |
-| 数据标准化 | 将普通设备 `list[]/increments[]` 与雨量计 `timeline+sensors` 统一成 `NormalizedDatapoint` | 降低脚本开发复杂度 |
-| 扩展隔离 | 转换脚本与发送器均为独立模块 | 便于后续增加 Kafka、AMQP、S3 等输出 |
+| 连接器自包含 | 每个连接器独立管理连接、协议、数据格式 | 灵活适配不同客户平台 |
+| 配置与代码解耦 | 所有凭据、设备过滤、抓取模式均在 JSON 配置中定义 | 降低部署修改成本 |
+| 数据标准化 | 将普通设备与雨量计数据统一成 `NormalizedDatapoint` | 降低连接器开发复杂度 |
 | 幂等控制 | 使用 `data/state.json` 保存每个流的 `lastForwardedTimestamp` | 避免重复发送 |
 | 可靠调用 | token 缓存 + HTTP 重试 + 超时控制 | 提高生产稳定性 |
 
@@ -49,15 +61,20 @@ flowchart LR
 
 ```text
 .
+├── connectors/                          # 连接器目录
+│   ├── example-connector.ts             # 连接器模板（参考用）
+│   └── xkh-connector.ts                # XKH 平台连接器
 ├── config/
-│   ├── example.config.json
-│   └── config.json.example
+│   ├── config.json.example              # 传统模式配置模板
+│   ├── example.config.json              # 传统模式完整示例
+│   └── example.connector-config.json    # 连接器模式配置示例
 ├── data/
 ├── scripts/
-│   └── default-converter.ts
+│   └── default-converter.ts             # 默认转换脚本（传统模式）
 ├── src/
 │   ├── core/
 │   │   ├── config.ts
+│   │   ├── connector-loader.ts          # 连接器动态加载
 │   │   ├── converter.ts
 │   │   ├── ecois-client.ts
 │   │   ├── http.ts
@@ -69,52 +86,169 @@ flowchart LR
 │   │   ├── http-output.ts
 │   │   └── mqtt-output.ts
 │   ├── utils/
-│   │   └── logger.ts
+│   │   ├── logger.ts
+│   │   ├── mqtt-helper.ts               # MQTT 连接池工具
+│   │   └── time.ts
 │   └── index.ts
 └── test/
     └── config.test.ts
 ```
 
-## 配置说明
+## 快速开始
 
-### 1. 复制配置模板
+### 1. 安装依赖
 
 ```bash
-cp config/config.json.example config/config.json
+bun install
 ```
 
-### 2. 填写 E 生态凭据
+### 2. 创建配置文件
+
+```bash
+cp config/example.connector-config.json config/config.json
+```
+
+编辑 `config/config.json`，填入 E 生态凭据：
 
 ```json
 {
   "api": {
     "appid": "your-appid",
     "secret": "your-secret"
+  },
+  "connector": {
+    "scriptPath": "./connectors/xkh-connector.ts"
   }
 }
 ```
 
-### 3. 关键配置项
+### 3. 运行
+
+```bash
+bun run dev
+```
+
+## 连接器开发指南
+
+连接器是一个自包含的 TypeScript 模块，负责接收标准化数据并转发到目标平台。
+
+### 连接器接口
+
+```ts
+import type { Connector, ConnectorContext, ConnectorLogger } from "../src/core/types.ts";
+
+interface Connector {
+  name: string;
+  init?(logger: ConnectorLogger): Promise<void>;   // 初始化连接
+  forward(context: ConnectorContext): Promise<void>; // 转发单个数据点
+  close?(): Promise<void>;                           // 清理连接
+}
+```
+
+### ConnectorContext
+
+每次调用 `forward()` 时，系统传入以下上下文：
+
+```ts
+interface ConnectorContext {
+  device: DeviceSummary;       // 设备信息（sn, type, alias, location 等）
+  datapoint: NormalizedDatapoint; // 标准化数据点
+  streamKey: string;           // 数据流标识
+  logger: ConnectorLogger;     // 日志工具
+}
+```
+
+### NormalizedDatapoint 数据结构
+
+```ts
+interface NormalizedDatapoint {
+  timestamp: number;           // Unix 时间戳（毫秒）
+  datetime?: string;           // 可读时间
+  kind: "standard" | "pluviometer";
+  nodeValues: Record<string, Record<string, unknown>>; // 节点 → 参数 → 值
+  sensors: Record<string, unknown>;    // 雨量计传感器数据
+  flatValues: Record<string, unknown>; // 扁平化的 "node.param": value
+  lng?: number;
+  lat?: number;
+  raw: unknown;                // 原始 API 响应
+}
+```
+
+### 开发步骤
+
+1. 复制模板：
+   ```bash
+   cp connectors/example-connector.ts connectors/my-connector.ts
+   ```
+
+2. 实现 `init()`：建立 MQTT/HTTP 等连接
+
+3. 实现 `forward()`：将 `datapoint` 转换为目标格式并发送
+
+4. 实现 `close()`：关闭连接
+
+5. 在 `config.json` 中指定：
+   ```json
+   { "connector": { "scriptPath": "./connectors/my-connector.ts" } }
+   ```
+
+### MQTT 连接池工具
+
+项目提供了 `MqttConnectionPool`，支持按 clientId 复用连接：
+
+```ts
+import { MqttConnectionPool } from "../src/utils/mqtt-helper.ts";
+
+const pool = new MqttConnectionPool({
+  brokerUrl: "mqtt://broker:1883",
+  username: "user",
+  password: "pass",
+}, logger);
+
+// 每个设备使用独立的 clientId
+const client = await pool.getClient(`client_${device.sn}`);
+await client.publishAsync(topic, payload, { qos: 0 });
+
+// 关闭所有连接
+await pool.closeAll();
+```
+
+## 配置说明
+
+### Connector 模式（推荐）
+
+```json
+{
+  "api": {
+    "appid": "your-appid",
+    "secret": "your-secret"
+  },
+  "devices": {
+    "fetch": { "mode": "latest" }
+  },
+  "connector": {
+    "scriptPath": "./connectors/xkh-connector.ts"
+  },
+  "state": { "path": "./data/state.json" },
+  "logging": { "level": "info" }
+}
+```
+
+### 关键配置项
 
 | 配置路径 | 类型 | 说明 |
 | --- | --- | --- |
 | `api.appid` | string | E 生态开放接口应用 ID |
 | `api.secret` | string | E 生态开放接口应用密钥 |
 | `devices.fetch.mode` | enum | `incremental` / `latest` / `range` / `pluviometerLatest` / `pluviometerHistory` |
+| `devices.includeSerials` | string[] | 仅处理指定设备（空数组 = 全部） |
+| `devices.excludeSerials` | string[] | 排除指定设备 |
 | `devices.overrides` | object | 按设备 SN 覆盖抓取策略 |
-| `converter.scriptPath` | string | 外部转换脚本路径 |
-| `converter.exportName` | string | 使用的导出函数名 |
-| `routing.defaultOutputIds` | string[] | 默认输出目标 |
-| `outputs[]` | array | HTTP / MQTT 输出配置 |
+| `connector.scriptPath` | string | 连接器脚本路径 |
+| `connector.exportName` | string | 导出函数名（默认 `"default"`） |
 | `state.path` | string | 已转发状态文件路径 |
 
 ## 运行方式
-
-### 安装依赖
-
-```bash
-bun install
-```
 
 ### 本地开发
 
@@ -140,66 +274,32 @@ bun run check
 bun test
 ```
 
-## 外部转换脚本接口
+## 传统 Converter 模式
 
-`scripts/default-converter.ts` 展示了最小可用脚本。系统会对每一个 datapoint 调用一次脚本。
+如果只需要简单的数据变换（不需要自定义连接管理），可以使用传统的 Converter 模式。
 
-### 输入结构
+配置中使用 `converter` + `routing` + `outputs` 代替 `connector`：
 
-```ts
-interface ConverterContext {
-  device: DeviceSummary;
-  datapoint: NormalizedDatapoint;
-  streamKey: string;
-  state: {
-    lastForwardedTimestamp?: number;
-  };
+```json
+{
+  "converter": {
+    "scriptPath": "./scripts/default-converter.ts",
+    "exportName": "default"
+  },
+  "routing": {
+    "defaultOutputIds": ["http-primary"]
+  },
+  "outputs": [
+    {
+      "id": "http-primary",
+      "type": "http",
+      "url": "https://example.com/iot/ingest"
+    }
+  ]
 }
 ```
 
-### 返回方式
-
-脚本可以返回以下任一形式：
-
-1. `null` / `undefined`：跳过当前点；
-2. 普通对象：系统会将其作为 `payload`；
-3. `{ payload, outputIds, topic, path, headers, qos, retain }`：完整控制下游发送；
-4. 上述对象数组：一次 datapoint 发送到多个目标。
-
-### MQTT 定向示例
-
-```ts
-export default async function convert({ device, datapoint }) {
-  return {
-    outputIds: ["mqtt-primary"],
-    topic: `sensor/${device.sn}/telemetry`,
-    qos: 1,
-    payload: {
-      sn: device.sn,
-      ts: datapoint.timestamp,
-      values: datapoint.flatValues,
-    },
-  };
-}
-```
-
-### HTTP 定向示例
-
-```ts
-export default async function convert({ device, datapoint }) {
-  return {
-    outputIds: ["http-primary"],
-    path: `/devices/${device.sn}/ingest`,
-    headers: {
-      "x-device-sn": device.sn,
-    },
-    payload: {
-      timestamp: datapoint.timestamp,
-      data: datapoint.flatValues,
-    },
-  };
-}
-```
+详见 `config/example.config.json`。
 
 ## 与 E 生态接口文档的映射关系
 
@@ -212,10 +312,3 @@ export default async function convert({ device, datapoint }) {
 | `/v3/device/{sn}/latest` | `fetchDeviceData(... mode=latest)` | 获取最新一包普通设备数据 |
 | `/v3/device/pluviometer/{sn}/data/history` | `fetchDeviceData(... mode=pluviometerHistory)` | 拉取压电式雨量计时间序列 |
 | `/v3/device/pluviometer/{sn}/data/latest` | `fetchDeviceData(... mode=pluviometerLatest)` | 获取压电式雨量计最新点 |
-
-## 建议的下一步扩展
-
-1. 增加 cron 或守护式轮询调度；
-2. 增加 DLQ（死信队列）与失败重放；
-3. 增加 Kafka / Redis Stream / AMQP 输出；
-4. 增加设备描述 `/v3/device/{sn}/description` 的字段字典缓存，用于更丰富的业务映射。

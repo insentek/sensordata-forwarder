@@ -48,7 +48,7 @@ describe("parseConfig", () => {
       },
     });
 
-    expect(config.converter.scriptPath.startsWith("/")).toBe(true);
+    expect(config.converter!.scriptPath.startsWith("/")).toBe(true);
     expect(config.state.path.startsWith("/")).toBe(true);
     expect(config.devices.fetch.includeParameters).toEqual([]);
     expect(config.devices.fetch.includeNodes).toEqual([]);

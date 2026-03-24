@@ -144,14 +144,18 @@ export interface PipelineConfig {
     fetch: FetchSpec;
     overrides: Record<string, FetchSpec>;
   };
-  converter: {
+  converter?: {
     scriptPath: string;
     exportName: string;
   };
-  routing: {
+  routing?: {
     defaultOutputIds: string[];
   };
-  outputs: OutputConfig[];
+  outputs?: OutputConfig[];
+  connector?: {
+    scriptPath: string;
+    exportName?: string;
+  };
   state: {
     path: string;
   };
@@ -159,6 +163,32 @@ export interface PipelineConfig {
     level: "debug" | "info" | "warn" | "error";
   };
 }
+
+// --- Connector architecture ---
+
+export interface ConnectorLogger {
+  debug(message: string, meta?: unknown): void;
+  info(message: string, meta?: unknown): void;
+  warn(message: string, meta?: unknown): void;
+  error(message: string, meta?: unknown): void;
+  child(scope: string): ConnectorLogger;
+}
+
+export interface ConnectorContext {
+  device: DeviceSummary;
+  datapoint: NormalizedDatapoint;
+  streamKey: string;
+  logger: ConnectorLogger;
+}
+
+export interface Connector {
+  name: string;
+  init?(logger: ConnectorLogger): Promise<void>;
+  forward(context: ConnectorContext): Promise<void>;
+  close?(): Promise<void>;
+}
+
+export type ConnectorFactory = (config?: unknown) => Connector | Promise<Connector>;
 
 export interface PipelineState {
   streams: Record<

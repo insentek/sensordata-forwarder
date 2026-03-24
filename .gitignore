@@ -145,3 +145,4 @@ vite.config.ts.timestamp-*
 data/*.json
 !data/.gitkeep
 config/local*.json
+config/config.json

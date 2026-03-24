@@ -1,0 +1,34 @@
+{
+  "api": {
+    "baseUrl": "http://openapi.ecois.info",
+    "appid": "replace-with-your-appid",
+    "secret": "replace-with-your-secret",
+    "timeoutMs": 15000,
+    "retry": {
+      "attempts": 3,
+      "backoffMs": 500
+    }
+  },
+  "devices": {
+    "pageSize": 100,
+    "includeAuthorized": ["own", "shared"],
+    "includeSerials": [],
+    "excludeSerials": [],
+    "concurrency": 4,
+    "fetch": {
+      "mode": "latest",
+      "includeParameters": [],
+      "includeNodes": []
+    },
+    "overrides": {}
+  },
+  "connector": {
+    "scriptPath": "./connectors/xkh-connector.ts"
+  },
+  "state": {
+    "path": "./data/state.json"
+  },
+  "logging": {
+    "level": "info"
+  }
+}

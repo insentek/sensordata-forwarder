@@ -42,6 +42,11 @@ const mqttOutputSchema = z.object({
   retain: z.boolean().default(false),
 });
 
+const connectorSchema = z.object({
+  scriptPath: z.string().min(1),
+  exportName: z.string().default("default"),
+});
+
 const configSchema = z.object({
   api: z.object({
     baseUrl: z.url().default("http://openapi.ecois.info"),
@@ -65,18 +70,33 @@ const configSchema = z.object({
   converter: z.object({
     scriptPath: z.string().min(1),
     exportName: z.string().default("default"),
-  }),
+  }).optional(),
   routing: z.object({
     defaultOutputIds: z.array(z.string()).min(1),
-  }),
-  outputs: z.array(z.union([httpOutputSchema, mqttOutputSchema])).min(1),
+  }).optional(),
+  outputs: z.array(z.union([httpOutputSchema, mqttOutputSchema])).optional(),
+  connector: connectorSchema.optional(),
   state: z.object({
     path: z.string().min(1).default("./data/state.json"),
   }),
   logging: z.object({
     level: z.enum(["debug", "info", "warn", "error"]).default("info"),
   }),
-});
+}).refine(
+  (config) => !!config.converter || !!config.connector,
+  { message: "Config must specify either 'converter' or 'connector'." },
+).refine(
+  (config) => !(config.converter && config.connector),
+  { message: "Config must not specify both 'converter' and 'connector'." },
+).refine(
+  (config) => {
+    if (config.converter) {
+      return !!config.routing && !!config.outputs && config.outputs.length > 0;
+    }
+    return true;
+  },
+  { message: "When using 'converter' mode, 'routing' and 'outputs' must also be provided." },
+);
 
 function resolvePath(inputPath: string): string {
   if (inputPath.startsWith("/") || inputPath.startsWith("file://")) {
@@ -97,7 +117,7 @@ function normalizeFetchSpec(fetchSpec: FetchSpec): FetchSpec {
 export function parseConfig(rawConfig: unknown): PipelineConfig {
   const parsed = configSchema.parse(rawConfig);
 
-  const outputs = parsed.outputs.map((output) => {
+  const outputs = parsed.outputs?.map((output) => {
     if (output.type === "http") {
       const httpOutput: HttpOutputConfig = {
         ...output,
@@ -113,10 +133,18 @@ export function parseConfig(rawConfig: unknown): PipelineConfig {
 
   return {
     ...parsed,
-    converter: {
-      ...parsed.converter,
-      scriptPath: resolvePath(parsed.converter.scriptPath),
-    },
+    converter: parsed.converter
+      ? {
+          ...parsed.converter,
+          scriptPath: resolvePath(parsed.converter.scriptPath),
+        }
+      : undefined,
+    connector: parsed.connector
+      ? {
+          ...parsed.connector,
+          scriptPath: resolvePath(parsed.connector.scriptPath),
+        }
+      : undefined,
     state: {
       path: resolvePath(parsed.state.path),
     },
