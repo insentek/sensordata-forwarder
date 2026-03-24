@@ -63,67 +63,6 @@ export interface FetchSpec {
   includeNodes?: string[];
 }
 
-export interface ConverterContext {
-  device: DeviceSummary;
-  datapoint: NormalizedDatapoint;
-  streamKey: string;
-  state: {
-    lastForwardedTimestamp?: number;
-  };
-}
-
-export interface OutboundMessage {
-  payload: unknown;
-  outputIds?: string[];
-  topic?: string;
-  path?: string;
-  headers?: Record<string, string>;
-  qos?: 0 | 1 | 2;
-  retain?: boolean;
-}
-
-export type ConverterResult =
-  | null
-  | undefined
-  | OutboundMessage
-  | OutboundMessage[]
-  | Record<string, unknown>
-  | string
-  | number
-  | boolean;
-
-export type ConverterFn = (
-  context: ConverterContext,
-) => ConverterResult | Promise<ConverterResult>;
-
-export interface ConverterModule {
-  default?: ConverterFn;
-  [key: string]: unknown;
-}
-
-export interface HttpOutputConfig {
-  id: string;
-  type: "http";
-  url: string;
-  method?: "POST" | "PUT" | "PATCH";
-  headers?: Record<string, string>;
-  timeoutMs?: number;
-}
-
-export interface MqttOutputConfig {
-  id: string;
-  type: "mqtt";
-  brokerUrl: string;
-  topic: string;
-  clientId?: string;
-  username?: string;
-  password?: string;
-  qos?: 0 | 1 | 2;
-  retain?: boolean;
-}
-
-export type OutputConfig = HttpOutputConfig | MqttOutputConfig;
-
 export interface PipelineConfig {
   api: {
     baseUrl: string;
@@ -144,27 +83,9 @@ export interface PipelineConfig {
     fetch: FetchSpec;
     overrides: Record<string, FetchSpec>;
   };
-  converter?: {
-    scriptPath: string;
-    exportName: string;
-  };
-  routing?: {
-    defaultOutputIds: string[];
-  };
-  outputs?: OutputConfig[];
-  connector?: {
-    scriptPath: string;
-    exportName?: string;
-  };
-  state: {
-    path: string;
-  };
-  logging: {
-    level: "debug" | "info" | "warn" | "error";
-  };
 }
 
-// --- Connector architecture ---
+// --- Connector ---
 
 export interface ConnectorLogger {
   debug(message: string, meta?: unknown): void;

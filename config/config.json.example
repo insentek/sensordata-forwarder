@@ -1,48 +1,6 @@
 {
   "api": {
-    "baseUrl": "http://openapi.ecois.info",
     "appid": "replace-with-your-appid",
-    "secret": "replace-with-your-secret",
-    "timeoutMs": 15000,
-    "retry": {
-      "attempts": 3,
-      "backoffMs": 500
-    }
-  },
-  "devices": {
-    "pageSize": 100,
-    "includeAuthorized": ["own", "shared"],
-    "includeSerials": [],
-    "excludeSerials": [],
-    "concurrency": 4,
-    "fetch": {
-      "mode": "incremental",
-      "includeParameters": [],
-      "includeNodes": []
-    },
-    "overrides": {}
-  },
-  "converter": {
-    "scriptPath": "./scripts/default-converter.ts",
-    "exportName": "default"
-  },
-  "routing": {
-    "defaultOutputIds": ["http-primary"]
-  },
-  "outputs": [
-    {
-      "id": "http-primary",
-      "type": "http",
-      "url": "https://example.com/iot/ingest",
-      "method": "POST",
-      "headers": {},
-      "timeoutMs": 10000
-    }
-  ],
-  "state": {
-    "path": "./data/state.json"
-  },
-  "logging": {
-    "level": "info"
+    "secret": "replace-with-your-secret"
   }
 }

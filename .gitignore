@@ -146,3 +146,5 @@ data/*.json
 !data/.gitkeep
 config/local*.json
 config/config.json
+*.yml
+!*.yml.example

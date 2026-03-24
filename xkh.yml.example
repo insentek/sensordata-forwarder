@@ -1,0 +1,11 @@
+mqtt:
+  broker: "mqtt://58.58.10.210:1883"
+  username: "xphd"
+  password: "replace-with-your-password"
+
+stations:
+  - sn: "11768401389126"
+    id: "3716030001"
+  - sn: "11744801377649"
+    id: "3716030002"
+  # Add more SN → StationID mappings here

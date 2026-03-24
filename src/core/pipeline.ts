@@ -1,8 +1,5 @@
 import type { Logger } from "../utils/logger.ts";
-import { loadConnector } from "./connector-loader.ts";
-import { loadConverter } from "./converter.ts";
 import { EcoisClient } from "./ecois-client.ts";
-import { buildOutputRouter } from "./output-router.ts";
 import { StateStore } from "./state.ts";
 import type {
   Connector,
@@ -12,12 +9,7 @@ import type {
   PipelineConfig,
 } from "./types.ts";
 
-interface ProcessDeviceContext {
-  config: PipelineConfig;
-  client: EcoisClient;
-  stateStore: StateStore;
-  logger: Logger;
-}
+const STATE_PATH = "./data/state.json";
 
 async function mapWithConcurrency<T>(
   items: T[],
@@ -71,113 +63,11 @@ function filterDevices(devices: DeviceSummary[], config: PipelineConfig): Device
   });
 }
 
-// --- Converter mode (legacy) ---
-
-async function processDeviceWithConverter(
-  {
-    config,
-    client,
-    stateStore,
-    logger,
-  }: ProcessDeviceContext,
-  device: DeviceSummary,
-  converter: Awaited<ReturnType<typeof loadConverter>>,
-  router: Awaited<ReturnType<typeof buildOutputRouter>>,
-): Promise<void> {
-  const fetchSpec = resolveFetchSpec(device, config);
-  const datapoints = await client.fetchDeviceData(device.sn, fetchSpec);
-
-  logger.info(`Device ${device.sn}: fetched ${datapoints.length} datapoints`, {
-    fetchMode: fetchSpec.mode,
-  });
-
-  for (const datapoint of datapoints) {
-    const streamKey = buildStreamKey(device, datapoint);
-    const streamState = stateStore.getStream(streamKey);
-
-    if (
-      typeof streamState.lastForwardedTimestamp === "number" &&
-      datapoint.timestamp <= streamState.lastForwardedTimestamp
-    ) {
-      logger.debug("Skip already forwarded datapoint", {
-        deviceSn: device.sn,
-        timestamp: datapoint.timestamp,
-        streamKey,
-      });
-      continue;
-    }
-
-    const messages = await converter({
-      device,
-      datapoint,
-      streamKey,
-      state: {
-        lastForwardedTimestamp: streamState.lastForwardedTimestamp,
-      },
-    });
-
-    if (messages.length === 0) {
-      logger.debug("Converter returned no messages", {
-        deviceSn: device.sn,
-        timestamp: datapoint.timestamp,
-      });
-      continue;
-    }
-
-    await router.send(config.routing!.defaultOutputIds, messages);
-    stateStore.updateStream(streamKey, {
-      lastForwardedTimestamp: datapoint.timestamp,
-    });
-  }
-}
-
-async function runConverterPipeline(
+async function processDevice(
   config: PipelineConfig,
+  client: EcoisClient,
+  stateStore: StateStore,
   logger: Logger,
-): Promise<void> {
-  const stateStore = new StateStore(config.state.path);
-  await stateStore.initialize();
-
-  const client = new EcoisClient(config.api);
-  const converter = await loadConverter(
-    config.converter!.scriptPath,
-    config.converter!.exportName,
-    config.routing!.defaultOutputIds,
-  );
-  const router = await buildOutputRouter(config.outputs!, logger);
-
-  try {
-    const allDevices = await client.listDevices(config.devices.pageSize);
-    const devices = filterDevices(allDevices, config);
-
-    logger.info(`Discovered ${allDevices.length} devices, selected ${devices.length}`, {
-      selected: devices.map((device) => device.sn),
-    });
-
-    await mapWithConcurrency(devices, config.devices.concurrency, async (device) => {
-      await processDeviceWithConverter(
-        { config, client, stateStore, logger },
-        device,
-        converter,
-        router,
-      );
-    });
-
-    await stateStore.save();
-  } finally {
-    await router.close();
-  }
-}
-
-// --- Connector mode ---
-
-async function processDeviceWithConnector(
-  {
-    config,
-    client,
-    stateStore,
-    logger,
-  }: ProcessDeviceContext,
   device: DeviceSummary,
   connector: Connector,
 ): Promise<void> {
@@ -217,18 +107,15 @@ async function processDeviceWithConnector(
   }
 }
 
-async function runConnectorPipeline(
+export async function runPipeline(
   config: PipelineConfig,
+  connector: Connector,
   logger: Logger,
 ): Promise<void> {
-  const stateStore = new StateStore(config.state.path);
+  const stateStore = new StateStore(STATE_PATH);
   await stateStore.initialize();
 
   const client = new EcoisClient(config.api);
-  const connector = await loadConnector(
-    config.connector!.scriptPath,
-    config.connector!.exportName,
-  );
 
   const connectorLogger = logger.child(`connector:${connector.name}`);
   connectorLogger.info(`Loaded connector: ${connector.name}`);
@@ -246,11 +133,7 @@ async function runConnectorPipeline(
     });
 
     await mapWithConcurrency(devices, config.devices.concurrency, async (device) => {
-      await processDeviceWithConnector(
-        { config, client, stateStore, logger },
-        device,
-        connector,
-      );
+      await processDevice(config, client, stateStore, logger, device, connector);
     });
 
     await stateStore.save();
@@ -259,16 +142,4 @@ async function runConnectorPipeline(
       await connector.close();
     }
   }
-}
-
-// --- Entry point ---
-
-export async function runPipeline(
-  config: PipelineConfig,
-  logger: Logger,
-): Promise<void> {
-  if (config.connector) {
-    return runConnectorPipeline(config, logger);
-  }
-  return runConverterPipeline(config, logger);
 }
